@@ -1,0 +1,24 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.ruff_cache
+# Virtual environments
+.venv
+.env
+.claude
+tmpclaude*
+conversation_history*
+
+account_cny.json
+kitchen_inventory.json
+.pytest_cache
+cufel_deepagent.egg-info
+workspaces/*
+!workspaces/.gitkeep
+!conversation_history_example.json
+!deep_space_analysis.md
+stock_portfolio.json

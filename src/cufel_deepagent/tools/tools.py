@@ -117,7 +117,7 @@ def read_skill_instructions(skill_name: str):
     这是启用任何技能的第一步，你必须通过此工具了解该技能包含哪些脚本、资源及执行顺序。
 
     args:
-    skill_name: 你所需要查阅的技能文件夹名称（例如：'monetary_market_report'）。
+    skill_name: 你所需要查阅的技能文件夹名称（例如：'monetary_market_report','corporate_research'）。
 
     返回：SKILL.md 的完整文本内容，包含 YAML 元数据和 Markdown 指令。
     """

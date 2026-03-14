@@ -12,6 +12,7 @@ authors = [
 ]
 requires-python = ">=3.11, <4.0"
 dependencies = [
+    "akshare>=1.18.38",
     "baostock>=0.8.9",
     "dashscope>=1.25.8",
     "deepagents==0.3.6",

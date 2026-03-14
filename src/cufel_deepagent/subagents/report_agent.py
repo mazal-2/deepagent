@@ -1,0 +1,2 @@
+# 这里是一个能够用akshare获取货币市场信息的report_agent，在banker接收客户想要看相应报告的时候会要求这个agent写一份报告
+# 从monetary_market_report/SKILL.md 里面读取研究报告的撰写指南。 里面的scripts 存有一个能够获取货币市场数据的程序

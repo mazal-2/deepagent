@@ -8,8 +8,9 @@ from unstructured.partition.pdf import partition_pdf
 from unstructured.chunking.title import chunk_by_title
 from unstructured.documents.elements import Table, Text
 import chromadb
-# from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction,OllamaEmbeddingFunction
+from langchain_ollama import OllamaEmbeddings
+from datetime import datetime
 # ======================================
 # 2. 基础配置（最小化参数，适配金融财报场景）
 # ======================================
@@ -24,6 +25,9 @@ CONFIG = {
     "embedding_model": "BAAI/bge-small-zh-v1.5"  # 开源中文嵌入模型（适配金融术语）
 }
 
+
+JSON_PATH = r"D:\\projects\deepagent\\project_datas\\car_embedded\\BYD_24_AR_chunks.json"
+CHROMA_PATH = r"D:\\projects\deepagent\\chroma_db"
 # ======================================
 # 3. 核心函数：PDF财报读取+分块（Unstructured）
 # ======================================
@@ -47,7 +51,7 @@ def load_and_chunk_financial_report(pdf_path: str) -> list[dict]:
         starting_page_number=1,
     )
 
-    # Step 2: 按字符数二次切分（避免单chunk过长，适配嵌入模型限制）
+    # Step 2: 按字符数二次切分（避免单chunk过长，适配嵌入模型限制） 是否有机会进行优化？
     chunks = chunk_by_title(
         elements,
         max_characters=CONFIG["chunk_max_characters"],
@@ -66,7 +70,7 @@ def load_and_chunk_financial_report(pdf_path: str) -> list[dict]:
             "company_name": "默认公司名（可从PDF文件名/内容解析）",  # 可扩展
             "report_year": 2024,  # 可扩展：从PDF解析财报年份
             "source": pdf_path  # 溯源PDF路径
-        }
+        } # 这里面的需要进行修改
         # 表格转文本（便于嵌入，保留结构化信息）
         chunk_text = chunk.text if content_type == "text" else f"表格内容：{chunk.text}"
         
@@ -94,10 +98,11 @@ def load_and_chunk_financial_report(pdf_path: str) -> list[dict]:
     return formatted_chunks
 
 
-"""
+
 # ======================================
 # 4. 核心函数：向量嵌入+存入ChromaDB
 # ======================================
+"""
 def embed_and_store_chunks(chunks: list[dict], collection_name: str) -> None:
     
     将分块后的财报内容嵌入向量，存入本地ChromaDB（持久化）
@@ -106,9 +111,11 @@ def embed_and_store_chunks(chunks: list[dict], collection_name: str) -> None:
     client = chromadb.PersistentClient(path=CONFIG["chroma_persist_dir"])
     
     # Step 2: 初始化嵌入函数（适配中文金融术语）
-    embedding_fn = SentenceTransformerEmbeddingFunction(
-        model_name=CONFIG["embedding_model"]
+    embedding_fn = OllamaEmbeddingFunction(
+        url="http://localhost:11434/api/embeddings", # 本地 Ollama 默认地址
+        model_name="qwen3-emb:4b",
     )
+
     
     # Step 3: 创建/获取向量集合（已存在则复用）
     collection = client.get_or_create_collection(
@@ -119,7 +126,7 @@ def embed_and_store_chunks(chunks: list[dict], collection_name: str) -> None:
 
     # Step 4: 批量插入向量（最小化批量逻辑）
     ids = [f"chunk_{i}" for i in range(len(chunks))]  # 唯一ID
-    texts = [chunk["text"] for chunk in chunks]
+    texts = [chunk["text"] for chunk in chunks] 
     metadatas = [chunk["metadata"] for chunk in chunks]
 
     # 插入ChromaDB（自动完成嵌入+存储）
@@ -130,14 +137,34 @@ def embed_and_store_chunks(chunks: list[dict], collection_name: str) -> None:
     )
 
     print(f"✅ 成功存入 {len(chunks)} 个财报chunk到ChromaDB，集合名：{collection_name}")
+"""
 
+def process_batch(collection, batch_chunks, start_id):
+    """处理一小批数据并存入 Chroma,client 以及 collection在函数外的本包内实例化"""
+    try:
+        ids = [f"byd_24_{start_id + i}" for i in range(len(batch_chunks))]
+        texts = [chunk["text"] for chunk in batch_chunks]
+        metadatas = [chunk["metadata"] for chunk in batch_chunks]
+        
+        # 这一步会内部调用 OllamaEmbeddingFunction 进行向量化
+        collection.upsert(
+            ids=ids,
+            documents=texts,
+            metadatas=metadatas
+        )
+        return len(batch_chunks)
+    except Exception as e:
+        print(f"❌ 批次起始 ID {start_id} 处理失败: {e}")
+        return 0
+
+"""
 # ======================================
 # 5. 核心函数：测试RAG检索（验证最小流程闭环）
 # ======================================
 def test_rag_retrieval(query: str, top_k: int = 3) -> list[dict]:
     
     测试检索：输入财务问题（如"资产负债率"），返回最相关的chunk
-    
+   
     # 初始化客户端+集合
     client = chromadb.PersistentClient(path=CONFIG["chroma_persist_dir"])
     collection = client.get_collection(
@@ -166,6 +193,9 @@ def test_rag_retrieval(query: str, top_k: int = 3) -> list[dict]:
 # ======================================
 # 6. 主流程执行（最小化调用）
 # ======================================
+
+
+
 if __name__ == "__main__":
     # Step 1: 读取PDF并分块
     print("🔍 开始读取并分块财报PDF...")
@@ -191,35 +221,65 @@ if __name__ == "__main__":
 # 如果你要测试存Chroma，取消下面两行注释并 pip install chromadb sentence-transformers
 # from langchain.vectorstores import Chroma
 # from langchain.embeddings import HuggingFaceEmbeddings
+import concurrent.futures 
 
 def main():
-    pdf_path = CONFIG["pdf_path"]
     
-    if not os.path.exists(pdf_path):
-        print(f"PDF文件不存在: {pdf_path}")
-        return
+    # 1. 加载 JSON 数据
+    print(f"[{datetime.now()}] 正在读取 JSON 文件...")
+    with open(JSON_PATH, 'r', encoding='utf-8') as f:
+        full_data = json.load(f)
     
-    print(f"开始处理比亚迪2024年报: {pdf_path}")
-    print("-" * 60)
+    # 2. 选取 200 到 500 的片段进行测试
+    # 注意：Python 切片左闭右开，200:501 代表索引 200 到 500
+    target_chunks = full_data
+    total_chunks = len(target_chunks)
+    print(f"已截取测试数据：从 Index 200 到 500，共 {total_chunks} 条。")
+
+    # 3. 初始化库
+    client = chromadb.PersistentClient(path=CHROMA_PATH)
+    embedding_fn = OllamaEmbeddingFunction(
+        model_name="qwen3-emb:4b", # 确保本地 ollama 已 pull 此模型
+        url="http://localhost:11434/api/embeddings"
+    )
     
-    chunks = load_and_chunk_financial_report(pdf_path)
+    collection = client.get_or_create_collection(
+        name="corp_report_byd",
+        embedding_function=embedding_fn
+    )
+
+    # 4. 多线程并发配置
+    max_threads = 2  # 针对 5060 8GB 优化的线程数
+    batch_size = 8   # 每批处理 10 条，避免单词 API 请求过大
     
-    if not chunks:
-        print("没有提取到任何chunk，检查PDF路径或Unstructured依赖")
-        return
+    # 将 301 条数据切分为 31 个 batch
+    batches = [target_chunks[i:i + batch_size] for i in range(0, total_chunks, batch_size)]
     
-    print(f"总chunk数量: {len(chunks)}")
-    print(f"平均chunk长度: {sum(len(c['text']) for c in chunks) / len(chunks):.0f} 字符")
-    print("\n前3个chunk样例（带元数据）：")
-    print("-" * 60)
-    
-    for i, chunk in enumerate(chunks[:3], 1):
-        print(f"Chunk {i}:")
-        print(f"  类型: {chunk['metadata']['type']}")
-        print(f"  页码: {chunk['metadata']['page_number']}")
-        print(f"  长度: {len(chunk['text'])} 字符")
-        print(f"  内容预览: {chunk['text'][:150]}...")
-        print("-" * 40)
+    print(f"开始入库，并发线程数: {max_threads}，总批数: {len(batches)}")
+    start_time = datetime.now()
+
+    # 5. 使用线程池并行执行
+    completed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+        # 提交所有任务
+        futures = {
+            executor.submit(process_batch, collection, batches[i], 200 + i*batch_size): i 
+            for i in range(len(batches))  # 这个submit里面的参数是提交给这个process_batch这个工具参数的
+        } # 把所有的这json的dicts分成多个batch再对里面进行操作
+        
+        for future in concurrent.futures.as_completed(futures):
+            batch_num = futures[future]
+            res = future.result()
+            completed += res
+            if completed % 50 == 0 or completed == total_chunks:
+                print(f"进度：已完成 {completed}/{total_chunks} 条向量化...")
+
+    duration = (datetime.now() - start_time).total_seconds()
+    print("-" * 50)
+    print(f"✅ 任务完成！")
+    print(f"总耗时: {duration:.2f} 秒")
+    print(f"平均速度: {total_chunks / duration:.2f} 条/秒")
+    print("-" * 50)
     
     # 可选：测试存入Chroma（注释掉，需要安装chromadb和embedding模型）
     # embeddings = HuggingFaceEmbeddings(model_name=CONFIG["embedding_model"])

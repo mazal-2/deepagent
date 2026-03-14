@@ -56,7 +56,7 @@ tools = [rag_retrieve,read_skill_instructions]
 llm = ChatDeepSeek(model="deepseek-chat")
 corp_researcher = create_agent(model=llm,tools=tools,system_prompt=CORP_SYSTEM_RPOMPT)
 
-query = "比亚迪在24年有哪些新车上市吗？"
+query = "请对比亚迪股份有限公司的 50 亿元流动资金贷款申请进行全面信贷风险背调，按照 corporate_research 技能的标准方法论和报告模板执行完整分析。"
 res = corp_researcher.invoke({"messages": HumanMessage(content=query)})
 
 for message in res['messages']:

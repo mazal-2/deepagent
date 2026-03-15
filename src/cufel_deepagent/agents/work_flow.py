@@ -3,10 +3,19 @@ from mcp.client.stdio import stdio_client
 from cufel_deepagent.create_agents.banking_agent import create_banking_agent
 from cufel_deepagent.create_agents.macro_eco import create_macro_agent
 from cufel_deepagent.create_agents.corp_researching import create_corp_researcher_agent
-
-
+from typing import TypedDict,List
+import json
 from src.cufel_deepagent.agents.prompts import BANKING_SYSTEM_PROMPT,CORP_SYSTEM_RPOMPT,MACRO_ECO_SYSTEM_PROMPT
 from langchain_deepseek import ChatDeepSeek
+from langgraph.graph import StateGraph,END
+from langgraph.checkpoint.memory import MemorySaver
+
+class BankingState(TypedDict):
+    loan_request:dict
+    market_report:str
+    due_diligence_report:str
+    final_decision:str
+    info_system:dict
 
 async def main_banking_system():
     """
@@ -26,8 +35,95 @@ async def main_banking_system():
             llm_macro = ChatDeepSeek(model='deepseek-chat',temperature=0.5)
             llm_corp = ChatDeepSeek(model='deepseek-chat',temperature=0.3)
 
-            banker = await create_banking_agent(llm_banker,session,BANKING_SYSTEM_PROMPT)
+            banker_agent = await create_banking_agent(llm_banker,session,BANKING_SYSTEM_PROMPT)
             macro_researcher = create_macro_agent(llm=llm_macro,system_prompt=MACRO_ECO_SYSTEM_PROMPT)
             corp_researcher = create_corp_researcher_agent(llm=llm_corp,system_prompt=CORP_SYSTEM_RPOMPT)
 
+            
 
+            async def banker_start(state:BankingState) -> BankingState:
+                """
+                1,贷款处理：由banker接收client的贷款申请，将用户的贷款申请存入到info_system之中，由agent调用mcp里面的工具register_loan_application将信息存入
+                同时这个info在state里面也会被反映出来
+                2，调用这个mcp里面的检测当前银行系统的工具，将当前的info_system传入到这个state里面，后面能够在两位研究员写报告的时候提供参考
+                """
+                
+                loan_req = state["loan_request"]
+                # 让 agent 帮我们把 dict 转成正确的 tool calling 格式
+                prompt = f"""
+                    现在请调用 register_loan_application 工具登记这笔申请：
+                    {json.dumps(loan_req, ensure_ascii=False, indent=2)}
+                    登记成功后不需要做其他操作。
+                    """
+                
+                await banker_agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
+                        # 不管 agent 输出什么，我们自己再读一次状态，确保拿到最新值
+                status_res = await session.read_resource("bank:status")
+                if status_res and status_res.contents:
+                        state["info_system"] = status_res.contents[0]
+                        # 早停（可选）
+                        if state["info_system"].get("deposit_pool", 0) < loan_req.get("amount", 0):
+                            state["final_decision"] = "Rejected: 现金池不足"
+                        return state
+            
+
+            def macro_report_node(state: BankingState) -> BankingState:
+                """macro_reporter 根据 requester 信息生成报告"""
+                result = macro_researcher.invoke({
+                    "messages": [{"role": "user", "content": f"Generate monetary market report for loan request: {state['loan_request']}"}]
+                })
+                state["market_report"] = result["output"]
+                return state
+
+            def corp_research_node(state: BankingState) -> BankingState:
+                """corp_researcher 做尽调"""
+                result = corp_researcher.invoke({
+                    "messages": [{"role": "user", "content": f"Due diligence for {state['loan_request']['company']}"}]
+                })
+                state["due_diligence_report"] = result["output"]
+                return state
+
+            async def banker_decide_node(state: BankingState) -> BankingState:
+                """banker 综合两份报告 + system_info 做最终决策"""
+
+                prompt = f"""
+                市场报告：{state['market_report']}
+                尽调报告：{state['due_diligence_report']}
+                当前系统信息：{state['system_info']}
+                请给出最终贷款决策，并更新现金池。
+                """
+                result = await banker_agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
+                
+                state["final_decision"] = result["output"]
+                # 更新 system_info（现金池变动、记录保存）
+                state["system_info"] = result.get("system_info", state["system_info"])
+                return state
+            
+            workflow = StateGraph(BankingState)
+
+            workflow.add_node('banker_start',banker_start)
+            workflow.add_node('macro_report',macro_report_node)
+            workflow.add_node('corp_research',corp_research_node)
+            workflow.add_node('banker_decide',banker_decide_node)
+
+            workflow.set_entry_point('banker_start')
+            workflow.add_edge('banker_start','macro_report')
+            workflow.add_edge('macro_report','corp_research')
+            workflow.add_edge('banker_decide',END)
+
+            app = workflow.compile(MemorySaver())
+
+            # 准备初始状态
+            initial_state: BankingState = {
+                "loan_request": {"company": "比亚迪", "amount": 5000000000, "purpose": "流动资金"},
+                "system_info": {},
+                "market_report": "",
+                "due_diligence_report": "",
+                "final_decision": "",
+                "history": []
+            }
+            
+            # 运行整个流程
+            final_state = await app.ainvoke(initial_state)
+            print("✅ 最终决策:", final_state["final_decision"])
+            print("💰 最终现金池:", final_state["system_info"].get("cash_pool"))

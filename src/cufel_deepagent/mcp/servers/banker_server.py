@@ -37,6 +37,14 @@ BANK_STATE: Dict[str, Any] = {
     'approval_history':[],              #
 }
 
+class LoanDecisionInput(BaseModel):
+    approve: bool = Field(..., description="是否批准本次贷款申请")
+    simple_reason_within_50_words: str = Field(
+        ...,
+        description="审批理由，简洁概括，严格控制在50个汉字以内",
+        max_length=100  # 50个汉字 ≈ 100字符，给点缓冲
+    )
+
 def _save_state():
     """开发阶段可以打印状态，正式版可以写文件"""
     print("[BANKER] 当前银行状态：")
@@ -290,6 +298,30 @@ def register_loan_application(request: LoanRequest) -> dict:
         "current_deposit_pool": BANK_STATE["deposit_pool"]
     }
 
+@mcp.tool(
+        name='submit_loan_decision',description='''
+    最终贷款审批结论提交工具。
+    Banker 在综合市场报告、尽调报告、银行系统状态后，必须调用此工具提交结构化决策。
+        注意：
+    - simple_reason_within_50_words 必须简洁，控制在50个汉字以内
+    - 不要在此工具内做任何业务逻辑判断，仅负责格式化输出
+
+传入参数说明:
+    class LoanDecisionInput(BaseModel):
+        approve: bool = Field(..., description="是否批准本次贷款申请")
+        simple_reason_within_50_words: str = Field(
+            ...,
+            description="审批理由，简洁概括，严格控制在50个汉字以内",
+            max_length=100  # 50个汉字 ≈ 100字符，给点缓冲
+        )
+''')
+def submit_loan_decision(decision: LoanDecisionInput) -> dict:
+    return {
+        "approve": decision.approve,
+        "simple_reason_within_50_words": decision.simple_reason_within_50_words
+    }
+
+
 
 # =====================================
 # 工具：更新每日利率
@@ -297,13 +329,9 @@ def register_loan_application(request: LoanRequest) -> dict:
 @mcp.tool(
         description="""
 更新银行当前日利率，或随机生成一个合理波动的新利率。
-
     调用方式：
     1. 指定新利率（推荐）：
-    {
-        "new_rate": 0.00085     // 浮点数，例如 0.00085 表示 0.085%
-    }
-
+    {"new_rate": 0.00085// 浮点数，例如 0.00085 表示 0.085%}
     2. 不传参数则随机波动（±20% 左右，限制在 0.00005 ~ 0.01 之间）：
     {}
 

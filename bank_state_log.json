@@ -1,0 +1,23 @@
+[
+  {
+    "operation_time": "2026-03-15T20:01:14.682803",
+    "bank_state_snapshot": {
+      "deposit_pool": 50000000000.0,
+      "daily_int_rate": 0.0008,
+      "loan_list": {
+        "100234": {
+          "applicant_id": 100234,
+          "loan_amount": 500000000.0,
+          "loan_term_days": 30,
+          "loan_installment": 24,
+          "applicant_asset": 50000000000.0,
+          "status": "pending",
+          "completed": "not_completed",
+          "apply_time": "2026-03-15T20:01:14.682803"
+        }
+      },
+      "last_updated": "2026-03-15T20:01:14.682803",
+      "approval_history": []
+    }
+  }
+]

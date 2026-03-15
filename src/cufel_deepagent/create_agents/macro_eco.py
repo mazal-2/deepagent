@@ -9,7 +9,7 @@ from src.cufel_deepagent.tools.tools import (
 )
 
 
-def create_reporter_agent(llm, system_prompt:str ='none' ):
+def create_macro_agent(llm, system_prompt:str ='none' ):
     """
     创建宏观货币研究专员 Agent。
     该 Agent 专注于通过本地 Skill 脚本获取金融数据并生成报告。

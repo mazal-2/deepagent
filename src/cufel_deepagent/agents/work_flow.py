@@ -58,7 +58,7 @@ async def main_banking_system():
                 
                 await banker_agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
                         # 不管 agent 输出什么，我们自己再读一次状态，确保拿到最新值
-                status_res = await session.read_resource("bank:status")
+                status_res = await session.read_resource("bank:status") # 用这个mcp的resource工具来获取这个info_system的现状，读取并存入到这个state之中
                 if status_res and status_res.contents:
                         state["info_system"] = status_res.contents[0]
                         # 早停（可选）
@@ -68,11 +68,52 @@ async def main_banking_system():
             
 
             def macro_report_node(state: BankingState) -> BankingState:
-                """macro_reporter 根据 requester 信息生成报告"""
+                """
+                能够读取这个 bankingstate 里面的 info_system 以及 loan_request 两个信息，
+                传入到这个 agent 的 prompt 进行 invoke。
+                在 prompt 里面还需要简单说明其工作流，如调用 macro 的工具列表
+                （though this has been included in its system prompt）
+                """
+                loan_req = state.get("loan_request", {})
+                info_sys = state.get("info_system", {})
+
+                # 准备上下文信息
+                context_info = f"""
+            当前银行系统状态（来自 banker_server）：
+            - 存款池余额：{info_sys.get('deposit_pool', '未知')} 元
+            - 当前日利率：{info_sys.get('daily_int_rate_percent', '未知')} %
+            - 待处理申请数：{info_sys.get('pending_applications', '未知')}
+            - 最后更新时间：{info_sys.get('last_updated', '未知')}
+
+            本次贷款申请概要：
+            {json.dumps(loan_req, ensure_ascii=False, indent=2)}
+            """
+
+                user_prompt = f"""请为以下贷款申请生成一份专业的货币市场分析报告。
+
+            {context_info}
+
+            任务要求：
+            1. 严格按照你系统提示中定义的工作流执行：
+            - 先调用 read_skill_instructions("monetary_market_report") 确认最新执行步骤
+            - 然后调用 run_skill_scripts 执行 get_current_info.py 获取最新宏观数据
+            - 如有需要，调用 read_skill_ref 理解指标含义
+            - 最后调用 read_skill_asset 获取 report_template.md 并填充生成报告
+
+            2. 报告必须结合当前银行存款池情况和本次贷款金额，给出对本次贷款审批有实际参考价值的结论。
+            例如：当前流动性是否宽松？利率走势是否利于大额中长期贷款？是否存在系统性风险信号？
+
+            请开始执行。
+            """
+
                 result = macro_researcher.invoke({
-                    "messages": [{"role": "user", "content": f"Generate monetary market report for loan request: {state['loan_request']}"}]
+                    "messages": [{"role": "user", "content": user_prompt}]
                 })
-                state["market_report"] = result["output"]
+
+                # 假设 agent 的输出结构中 "output" 是最终报告文本
+                # 如果你的 agent 返回格式不同，请相应调整
+                state["market_report"] = result.get("output", "（报告生成失败）")
+                # 这个out_put能否得到处理？
                 return state
 
             def corp_research_node(state: BankingState) -> BankingState:
